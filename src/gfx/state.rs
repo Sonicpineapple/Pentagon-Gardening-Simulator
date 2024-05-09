@@ -17,6 +17,7 @@ pub(crate) struct GraphicsState {
     pub(super) circle_instance_buffer: Mutex<super::cache::CachedDynamicBuffer>,
     pub(super) texture: Mutex<Option<wgpu::Texture>>,
     pub(super) sampler: wgpu::Sampler,
+    pub(super) target_format: wgpu::TextureFormat,
 }
 impl GraphicsState {
     pub(crate) fn new(render_state: &eframe::egui_wgpu::RenderState) -> Self {
@@ -61,6 +62,7 @@ impl GraphicsState {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let target_format = render_state.target_format;
         Self {
             device,
             queue,
@@ -72,6 +74,7 @@ impl GraphicsState {
             circle_instance_buffer,
             texture,
             sampler,
+            target_format,
         }
     }
 

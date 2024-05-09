@@ -4,6 +4,7 @@ use eframe::egui::{self, pos2, vec2, Pos2, Vec2};
 
 mod gfx;
 use gfx::{CircleInstance, GraphicsState};
+use itertools::Itertools;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -17,12 +18,31 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+struct RotCircle {
+    cen: Pos,
+    rad: f64,
+    step: u32,
+}
+
+fn gen_circles(N: usize) -> Vec<RotCircle> {
+    let ang = std::f64::consts::TAU / N as f64;
+    let angs = (0..N).map(|n| n as f64 * ang).collect_vec();
+    angs.iter()
+        .map(|ang| RotCircle {
+            cen: Pos::new(ang.cos() / 2., ang.sin() / 2.),
+            rad: 0.5,
+            step: 5,
+        })
+        .collect_vec()
+}
+
 struct App {
     gfx: Arc<GraphicsState>,
-    a_rad: f64,
-    b_rad: f64,
-    a_step: u32,
-    b_step: u32,
+    circles: Vec<RotCircle>,
+    // a_rad: f64,
+    // b_rad: f64,
+    // a_step: u32,
+    // b_step: u32,
     scale: f32,
     depth: u32,
 }
@@ -32,10 +52,7 @@ impl App {
             gfx: Arc::new(GraphicsState::new(
                 cc.wgpu_render_state.as_ref().expect("No render state"),
             )),
-            a_rad: 0.5,
-            b_rad: 0.5,
-            a_step: 5,
-            b_step: 5,
+            circles: gen_circles(2),
             scale: 1.,
             depth: 100,
         }
@@ -47,27 +64,36 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("Sliders").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    clear |= ui
-                        .add(egui::Slider::new(&mut self.a_rad, (0.)..=(2.)))
-                        .changed();
-                    clear |= ui
-                        .add(egui::Slider::new(&mut self.b_rad, (0.)..=(2.)))
-                        .changed();
-                    clear |= ui
-                        .add(egui::Slider::new(&mut self.scale, (0.)..=(10.)))
-                        .changed();
+                    if ui.button("-").clicked() {
+                        if self.circles.len() > 1 {
+                            self.circles = gen_circles(self.circles.len() - 1);
+                            clear = true;
+                        }
+                    }
+                    if ui.button("+").clicked() {
+                        self.circles = gen_circles(self.circles.len() + 1);
+                        clear = true;
+                    }
                 });
                 ui.vertical(|ui| {
                     clear |= ui
-                        .add(egui::Slider::new(&mut self.a_step, 2..=10))
+                        .add(egui::Slider::new(&mut self.scale, (0.)..=(10.)))
                         .changed();
                     clear |= ui
-                        .add(egui::Slider::new(&mut self.b_step, 2..=10))
-                        .changed();
-                    clear |= ui
-                        .add(egui::Slider::new(&mut self.depth, 1..=10000))
+                        .add(egui::Slider::new(&mut self.depth, 1..=4000))
                         .changed();
                 });
+
+                for circle in &mut self.circles {
+                    ui.vertical(|ui| {
+                        clear |= ui
+                            .add(egui::Slider::new(&mut circle.rad, (0.)..=(2.)))
+                            .changed();
+                        clear |= ui
+                            .add(egui::Slider::new(&mut circle.step, 2..=10))
+                            .changed();
+                    });
+                }
             });
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -88,12 +114,6 @@ impl eframe::App for App {
             let trans = |pos| transform(pos, trans_tup);
             let itrans = |pos| inv_transform(pos, trans_tup);
 
-            // let a_cen = cen - (unit / 2. * vec2(1., 0.));
-            // let b_cen = cen + (unit / 2. * vec2(1., 0.));
-            let a_cen = Pos::new(-0.5, 0.);
-            let b_cen = Pos::new(0.5, 0.);
-            let a_cen_screen = trans(a_cen.into());
-            let b_cen_screen = trans(b_cen.into());
             let mut circles = vec![];
             if r.is_pointer_button_down_on() {
                 if let Some(mpos) = ctx.pointer_latest_pos() {
@@ -101,10 +121,11 @@ impl eframe::App for App {
                     let seed: Pos = itrans(mpos).into();
                     let seed = Pos::new(seed.x, -seed.y);
                     let point_max_rad = |point: Pos| {
-                        f64::min(
-                            (a_cen.dist(point) - self.a_rad).abs(),
-                            (b_cen.dist(point) - self.b_rad).abs(),
-                        )
+                        self.circles
+                            .iter()
+                            .map(|c| (c.cen.dist(point) - c.rad).abs())
+                            .reduce(f64::min)
+                            .expect("Oops, no circles")
                     };
                     let mut max_rad = point_max_rad(seed);
                     let mut points = vec![(seed, 0)];
@@ -115,23 +136,19 @@ impl eframe::App for App {
                         if i >= points.len() {
                             break;
                         }
-                        if in_circle(points[i].0, a_cen, self.a_rad) {
-                            let new = points[i].0.rotate(a_cen, self.a_step);
-                            if pointset.insert(&new.into(), ()).is_none() {
-                                points.push((new, i));
-                                max_rad = max_rad.min(point_max_rad(new));
-                            }
-                        }
-                        if in_circle(points[i].0, b_cen, self.b_rad) {
-                            let new = points[i].0.rotate(b_cen, self.b_step);
-                            if pointset.insert(&new.into(), ()).is_none() {
-                                points.push((new, i));
-                                max_rad = max_rad.min(point_max_rad(new));
+                        for circle in &self.circles {
+                            if in_circle(points[i].0, circle.cen, circle.rad) {
+                                let new = points[i].0.rotate(circle.cen, circle.step);
+                                if pointset.insert(&new.into(), ()).is_none() {
+                                    points.push((new, i));
+                                    max_rad = max_rad.min(point_max_rad(new));
+                                }
                             }
                         }
                     }
                     for point in &points {
-                        let col = colorous::SINEBOW.eval_rational(points.len() % 20, 21);
+                        let col = colorous::SINEBOW
+                            .eval_rational((calculate_hash(&points.len()) % 69) as usize, 70);
                         let col = [
                             col.r as f32 / 255.,
                             col.g as f32 / 255.,
@@ -172,16 +189,14 @@ impl eframe::App for App {
                 },
             ));
             ctx.request_repaint();
-            ui.painter().circle_stroke(
-                a_cen_screen,
-                self.a_rad as f32 * unit,
-                (4., egui::Color32::RED),
-            );
-            ui.painter().circle_stroke(
-                b_cen_screen,
-                self.b_rad as f32 * unit,
-                (4., egui::Color32::BLUE),
-            );
+            for circle in &self.circles {
+                let cen: Pos2 = circle.cen.into();
+                painter.circle_stroke(
+                    trans(pos2(cen.x, -cen.y)),
+                    circle.rad as f32 * unit,
+                    (4., egui::Color32::RED),
+                );
+            }
         });
     }
 }
@@ -195,6 +210,12 @@ fn transform(pos: Pos2, transform: (f32, Vec2)) -> Pos2 {
 }
 fn inv_transform(pos: Pos2, transform: (f32, Vec2)) -> Pos2 {
     ((pos - transform.1).to_vec2() / transform.0).to_pos2()
+}
+
+fn calculate_hash<T: std::hash::Hash>(t: &T) -> u64 {
+    let mut s = std::hash::DefaultHasher::new();
+    t.hash(&mut s);
+    std::hash::Hasher::finish(&s)
 }
 
 #[derive(Debug, Default, Copy, Clone)]

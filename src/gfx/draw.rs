@@ -55,18 +55,18 @@ impl eframe::egui_wgpu::CallbackTrait for RenderResources {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: self.gfx.target_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[
-                    wgpu::TextureFormat::Rgba8UnormSrgb,
-                    wgpu::TextureFormat::Rgba8Unorm,
+                    self.gfx.target_format.add_srgb_suffix(),
+                    self.gfx.target_format.remove_srgb_suffix(),
                 ],
             })
         });
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            format: Some(self.gfx.target_format.remove_srgb_suffix()),
             ..Default::default()
         });
         let circle_instance_buffer = self
