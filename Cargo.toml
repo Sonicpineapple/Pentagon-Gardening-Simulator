@@ -1,0 +1,12 @@
+[package]
+name = "pentagon_gardening_simulator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = "1.15.0"
+colorous = "1.0.14"
+eframe = { version = "0.27.2", default-features = false, features = ["accesskit", "default_fonts", "wayland", "web_screen_reader", "wgpu", "x11"] }
+hypermath = { git = "https://github.com/HactarCE/Hyperspeedcube.git", tag = "v2.0.0-pre.7" }
+itertools = "0.12.1"
+parking_lot = "0.12.2"
