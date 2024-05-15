@@ -33,7 +33,8 @@ fn uv_vertex(in: UvVertexInput) -> UvVertexOutput {
 
 @fragment
 fn blit_fragment(in: UvVertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(blit_src_texture, blit_src_sampler, in.uv);
+    let col = textureSample(blit_src_texture, blit_src_sampler, in.uv);
+    return vec4(col.rgb / 2. + 0.25, col.a);
 }
 
 

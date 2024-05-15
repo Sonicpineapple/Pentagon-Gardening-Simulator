@@ -18,6 +18,7 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[derive(Debug, Clone)]
 struct RotCircle {
     cen: Pos,
     rad: f64,
@@ -29,11 +30,17 @@ fn gen_circles(N: usize) -> Vec<RotCircle> {
     let angs = (0..N).map(|n| n as f64 * ang).collect_vec();
     angs.iter()
         .map(|ang| RotCircle {
-            cen: Pos::new(ang.cos() / 2., ang.sin() / 2.),
+            cen: Pos::new(-ang.cos() / 2., ang.sin() / 2.),
             rad: 0.5,
             step: 5,
         })
         .collect_vec()
+}
+fn gen_colors(i: usize) -> egui::Color32 {
+    if let Some(col) = colorous::SET1.get(i) {
+        return egui::Color32::from_rgb(col.r, col.g, col.b);
+    };
+    return egui::Color32::GOLD;
 }
 
 struct App {
@@ -45,6 +52,7 @@ struct App {
     // b_step: u32,
     scale: f32,
     depth: u32,
+    grip_rad: f32,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -53,8 +61,9 @@ impl App {
                 cc.wgpu_render_state.as_ref().expect("No render state"),
             )),
             circles: gen_circles(2),
-            scale: 1.,
-            depth: 100,
+            scale: 0.5,
+            depth: 500,
+            grip_rad: 0.025,
         }
     }
 }
@@ -64,30 +73,33 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("Sliders").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
+                    if ui.button("+").clicked() {
+                        self.circles = gen_circles(self.circles.len() + 1);
+                        clear = true;
+                    }
                     if ui.button("-").clicked() {
                         if self.circles.len() > 1 {
                             self.circles = gen_circles(self.circles.len() - 1);
                             clear = true;
                         }
                     }
-                    if ui.button("+").clicked() {
-                        self.circles = gen_circles(self.circles.len() + 1);
-                        clear = true;
-                    }
                 });
                 ui.vertical(|ui| {
                     clear |= ui
-                        .add(egui::Slider::new(&mut self.scale, (0.)..=(10.)))
+                        .add(egui::Slider::new(&mut self.scale, (0.1)..=(10.)).logarithmic(true))
                         .changed();
                     clear |= ui
-                        .add(egui::Slider::new(&mut self.depth, 1..=4000))
+                        .add(egui::Slider::new(&mut self.depth, 100..=4000).logarithmic(true))
+                        .changed();
+                    clear |= ui
+                        .add(egui::Slider::new(&mut self.grip_rad, (0.)..=(0.1)))
                         .changed();
                 });
 
                 for circle in &mut self.circles {
                     ui.vertical(|ui| {
                         clear |= ui
-                            .add(egui::Slider::new(&mut circle.rad, (0.)..=(2.)))
+                            .add(egui::Slider::new(&mut circle.rad, (0.)..=(3.)))
                             .changed();
                         clear |= ui
                             .add(egui::Slider::new(&mut circle.step, 2..=10))
@@ -115,51 +127,105 @@ impl eframe::App for App {
             let itrans = |pos| inv_transform(pos, trans_tup);
 
             let mut circles = vec![];
+            let mut grips = vec![];
             if r.is_pointer_button_down_on() {
                 if let Some(mpos) = ctx.pointer_latest_pos() {
                     //let mpos = itrans(mpos);
                     let seed: Pos = itrans(mpos).into();
                     let seed = Pos::new(seed.x, -seed.y);
-                    let point_max_rad = |point: Pos| {
-                        self.circles
-                            .iter()
-                            .map(|c| (c.cen.dist(point) - c.rad).abs())
-                            .reduce(f64::min)
-                            .expect("Oops, no circles")
-                    };
-                    let mut max_rad = point_max_rad(seed);
-                    let mut points = vec![(seed, 0)];
-                    let mut pointset: hypermath::collections::ApproxHashMap<Pos, ()> =
-                        hypermath::collections::approx_hashmap::ApproxHashMap::new();
-                    pointset.insert(&seed, ());
-                    for i in 0..self.depth as usize {
-                        if i >= points.len() {
-                            break;
-                        }
-                        for circle in &self.circles {
-                            if in_circle(points[i].0, circle.cen, circle.rad) {
-                                let new = points[i].0.rotate(circle.cen, circle.step);
-                                if pointset.insert(&new.into(), ()).is_none() {
-                                    points.push((new, i));
-                                    max_rad = max_rad.min(point_max_rad(new));
+                    if ui.input(|i| i.pointer.primary_down()) {
+                        let point_max_rad = |point: Pos| {
+                            self.circles
+                                .iter()
+                                .map(|c| (c.cen.dist(point) - c.rad).abs())
+                                .reduce(f64::min)
+                                .expect("Oops, no circles")
+                        };
+                        let mut max_rad = point_max_rad(seed);
+                        let mut points = vec![(seed, 0)];
+                        let mut pointset: hypermath::collections::ApproxHashMap<Pos, ()> =
+                            hypermath::collections::approx_hashmap::ApproxHashMap::new();
+                        pointset.insert(&seed, ());
+                        for i in 0..self.depth as usize {
+                            if i >= points.len() {
+                                break;
+                            }
+                            for circle in &self.circles {
+                                if in_circle(points[i].0, circle.cen, circle.rad) {
+                                    let new = points[i].0.rotate(circle.cen, circle.step);
+                                    if pointset.insert(&new.into(), ()).is_none() {
+                                        points.push((new, i));
+                                        max_rad = max_rad.min(point_max_rad(new));
+                                    }
                                 }
                             }
                         }
+                        for point in &points {
+                            let col = colorous::SINEBOW.eval_rational(
+                                (calculate_hash(&(points.len() + 1))) as u32 as usize,
+                                u32::MAX as usize + 1,
+                            );
+                            let col = [
+                                col.r as f32 / 255.,
+                                col.g as f32 / 255.,
+                                col.b as f32 / 255.,
+                                1.,
+                            ];
+                            circles.push(Circle {
+                                centre: point.0.into(),
+                                radius: max_rad as f32,
+                                col,
+                            })
+                        }
                     }
-                    for point in &points {
-                        let col = colorous::SINEBOW
-                            .eval_rational((calculate_hash(&points.len()) % 69) as usize, 70);
-                        let col = [
-                            col.r as f32 / 255.,
-                            col.g as f32 / 255.,
-                            col.b as f32 / 255.,
-                            1.,
-                        ];
-                        circles.push(Circle {
-                            centre: point.0.into(),
-                            radius: max_rad as f32,
-                            col,
-                        })
+
+                    if ui.input(|i| i.pointer.secondary_down()) {
+                        let mut points = vec![];
+                        let mut pointset: hypermath::collections::ApproxHashMap<Pos, ()> =
+                            hypermath::collections::approx_hashmap::ApproxHashMap::new();
+
+                        let base_grips = GripSet {
+                            circles: self.circles.clone(),
+                        };
+                        let mut gripsets = vec![base_grips.clone()];
+                        let mut gripsetset: hypermath::collections::ApproxHashMap<GripSet, ()> =
+                            hypermath::collections::approx_hashmap::ApproxHashMap::new();
+                        gripsetset.insert(&base_grips, ());
+                        for (i, g) in self
+                            .circles
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, c)| in_circle(seed, c.cen, c.rad))
+                        {
+                            pointset.insert(&g.cen, ());
+                            points.push((g.cen.clone(), i));
+                        }
+
+                        for i in 0..self.depth as usize {
+                            if i >= gripsets.len() {
+                                break;
+                            }
+                            for j in 0..gripsets[i].circles.len() {
+                                if in_circle(
+                                    seed,
+                                    gripsets[i].circles[j].cen,
+                                    gripsets[i].circles[j].rad,
+                                ) {
+                                    let new_set = gripsets[i].rotate_by(j);
+                                    if gripsetset.insert(&new_set, ()).is_none() {
+                                        for (i, grip) in new_set.circles.iter().enumerate() {
+                                            if in_circle(seed, grip.cen, grip.rad) {
+                                                if pointset.insert(&grip.cen.into(), ()).is_none() {
+                                                    points.push((grip.cen, i));
+                                                }
+                                            }
+                                        }
+                                        gripsets.push(new_set);
+                                    }
+                                }
+                            }
+                        }
+                        grips = points;
                     }
                 }
             }
@@ -188,15 +254,25 @@ impl eframe::App for App {
                     clear,
                 },
             ));
-            ctx.request_repaint();
-            for circle in &self.circles {
+            for (i, circle) in self.circles.iter().enumerate() {
                 let cen: Pos2 = circle.cen.into();
                 painter.circle_stroke(
                     trans(pos2(cen.x, -cen.y)),
                     circle.rad as f32 * unit,
-                    (4., egui::Color32::RED),
+                    (4., gen_colors(i)),
                 );
             }
+            for (grip, i) in grips {
+                // let cen: Pos2 = grip.cen.into();
+                let cen: Pos2 = grip.into();
+                painter.circle(
+                    trans(pos2(cen.x, -cen.y)),
+                    self.grip_rad * unit,
+                    gen_colors(i),
+                    (2., egui::Color32::LIGHT_GRAY),
+                );
+            }
+            ctx.request_repaint();
         });
     }
 }
@@ -277,6 +353,42 @@ impl hypermath::collections::approx_hashmap::ApproxHashMapKey for Pos {
         ) -> hypermath::collections::approx_hashmap::FloatHash,
     ) -> Self::Hash {
         [self.x as f64, self.y as f64].map(float_hash_fn)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GripSet {
+    circles: Vec<RotCircle>,
+}
+impl GripSet {
+    fn rotate_by(&self, index: usize) -> Self {
+        let circles = self
+            .circles
+            .iter()
+            .map(|circle| RotCircle {
+                cen: circle
+                    .cen
+                    .rotate(self.circles[index].cen, self.circles[index].step),
+                rad: circle.rad,
+                step: circle.step,
+            })
+            .collect_vec();
+        Self { circles }
+    }
+}
+impl hypermath::collections::approx_hashmap::ApproxHashMapKey for GripSet {
+    type Hash = Vec<<Pos as hypermath::collections::approx_hashmap::ApproxHashMapKey>::Hash>;
+
+    fn approx_hash(
+        &self,
+        mut float_hash_fn: impl FnMut(
+            hypermath::prelude::Float,
+        ) -> hypermath::collections::approx_hashmap::FloatHash,
+    ) -> Self::Hash {
+        self.circles
+            .iter()
+            .map(|circle| circle.cen.approx_hash(&mut float_hash_fn))
+            .collect()
     }
 }
 
