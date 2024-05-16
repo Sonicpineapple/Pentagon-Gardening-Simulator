@@ -23,10 +23,16 @@ pub(crate) struct RotCircle {
     pub cen: Pos,
     pub rad: f64,
     pub step: u32,
+    pub inverted: bool,
 }
 impl RotCircle {
-    pub fn new(cen: Pos, rad: f64, step: u32) -> Self {
-        Self { cen, rad, step }
+    pub fn new(cen: Pos, rad: f64, step: u32, inverted: bool) -> Self {
+        Self {
+            cen,
+            rad,
+            step,
+            inverted,
+        }
     }
 
     pub fn rotate_point(&self, point: Pos) -> Pos {
@@ -49,7 +55,7 @@ impl RotCircle {
     }
 
     pub fn contains(&self, point: &Pos) -> bool {
-        self.cen.dist_sq(point) < self.rad * self.rad
+        (self.cen.dist_sq(point) < self.rad * self.rad) ^ self.inverted
     }
 }
 

@@ -25,7 +25,7 @@ fn gen_circles(N: usize) -> Vec<RotCircle> {
     let ang = std::f64::consts::TAU / N as f64;
     let angs = (0..N).map(|n| n as f64 * ang).collect_vec();
     angs.iter()
-        .map(|ang| RotCircle::new(Pos::new(-ang.cos() / 2., ang.sin() / 2.), 0.5, 5))
+        .map(|ang| RotCircle::new(Pos::new(-ang.cos() / 2., ang.sin() / 2.), 0.5, 5, false))
         .collect_vec()
 }
 fn gen_colors(i: usize) -> egui::Color32 {
@@ -90,11 +90,15 @@ impl eframe::App for App {
                 for circle in &mut self.circles {
                     ui.vertical(|ui| {
                         clear |= ui
-                            .add(egui::Slider::new(&mut circle.rad, (0.)..=(3.)))
+                            .add(
+                                egui::Slider::new(&mut circle.rad, (0.)..=(2.))
+                                    .clamp_to_range(false),
+                            )
                             .changed();
                         clear |= ui
-                            .add(egui::Slider::new(&mut circle.step, 2..=10))
+                            .add(egui::Slider::new(&mut circle.step, 2..=16).clamp_to_range(false))
                             .changed();
+                        clear |= ui.checkbox(&mut circle.inverted, "Invert").clicked()
                     });
                 }
             });
