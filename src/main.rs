@@ -1,9 +1,10 @@
-use std::{ops::Sub, sync::Arc};
+use std::sync::Arc;
 
+use bitvec::prelude::*;
 use eframe::egui::{self, pos2, vec2, Pos2, Vec2};
 
 mod geom;
-use geom::{Circle, Pos, RotCircle};
+use geom::{Circle, Curvature, GraphicsCircle, Pos, RotCircle};
 
 mod gfx;
 use gfx::GraphicsState;
@@ -21,11 +22,25 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-fn gen_circles(N: usize) -> Vec<RotCircle> {
+fn gen_circles(N: usize, distance: f64, curvature: Curvature) -> Vec<RotCircle> {
     let ang = std::f64::consts::TAU / N as f64;
     let angs = (0..N).map(|n| n as f64 * ang).collect_vec();
+    let distance = match curvature {
+        Curvature::Spherical => (distance / 4.).tan(),
+        Curvature::Euclidean => distance / 2.,
+        Curvature::Hyperbolic => (distance / 4.).tanh(),
+    };
     angs.iter()
-        .map(|ang| RotCircle::new(Pos::new(-ang.cos() / 2., ang.sin() / 2.), 0.5, 5, false))
+        .map(|ang| {
+            RotCircle::new(
+                distance * Pos::new(-ang.cos(), ang.sin()),
+                // Pos::new(0., 0.),
+                0.5,
+                5,
+                curvature,
+                false,
+            )
+        })
         .collect_vec()
 }
 fn gen_colors(i: usize) -> egui::Color32 {
@@ -42,6 +57,15 @@ struct App {
     depth: u32,
     grip_rad: f32,
     grip_cuts: bool,
+    autofill: bool,
+    index: usize,
+    pixel_mask: BitBox,
+    curvature: Curvature,
+    circle_distance: f64,
+    circle_count: usize,
+    /// Whether drawing parameters have changed
+    reset: bool,
+    regenerate: bool,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -49,56 +73,231 @@ impl App {
             gfx: Arc::new(GraphicsState::new(
                 cc.wgpu_render_state.as_ref().expect("No render state"),
             )),
-            circles: gen_circles(2),
+            circles: vec![],
             scale: 0.5,
             depth: 500,
-            grip_rad: 0.025,
+            grip_rad: 0.05,
             grip_cuts: false,
+            autofill: false,
+            index: 0,
+            pixel_mask: BitVec::EMPTY.into_boxed_bitslice(),
+            curvature: Curvature::Euclidean,
+            circle_distance: 1.,
+            circle_count: 2,
+            reset: true,
+            regenerate: true,
+        }
+    }
+
+    fn expand_seed(&self, seed: Pos, circles: &mut Vec<GraphicsCircle>) {
+        let point_max_rad = |point: Pos| {
+            self.circles
+                .iter()
+                .map(|c| (c.circle.cen.dist_in_space(&point, self.curvature) - c.circle.rad).abs())
+                .reduce(f64::min)
+                .expect("Oops, no circles")
+        };
+        let mut max_rad = point_max_rad(seed);
+        let mut points = vec![(seed, 0)];
+        let mut pointset: hypermath::collections::ApproxHashMap<Pos, ()> =
+            hypermath::collections::approx_hashmap::ApproxHashMap::new();
+        pointset.insert(&seed, ());
+        for i in 0..self.depth as usize {
+            if i >= points.len() {
+                break;
+            }
+            for circle in &self.circles {
+                if circle.contains(&points[i].0) {
+                    let new = circle.rotate_point(points[i].0);
+                    if pointset.insert(&new.into(), ()).is_none() {
+                        points.push((new, i));
+                        max_rad = max_rad.min(point_max_rad(new));
+                    }
+                }
+            }
+        }
+        for point in &points {
+            let col = if points.len() as u32 > self.depth {
+                [0.5, 0.5, 0.5, 1.]
+            } else {
+                let col = colorous::SINEBOW.eval_rational(
+                    (calculate_hash(&(points.len() + 1))) as u32 as usize,
+                    u32::MAX as usize + 1,
+                );
+                [
+                    col.r as f32 / 255.,
+                    col.g as f32 / 255.,
+                    col.b as f32 / 255.,
+                    1.,
+                ]
+            };
+            max_rad = max_rad.min(point.0.dist_to_inf(self.curvature));
+            let (cen, rad) =
+                Circle::new(point.0, max_rad, self.curvature).euclidean_centre_radius();
+            circles.push(GraphicsCircle {
+                centre: cen.into(),
+                radius: rad as f32,
+                col,
+            });
+        }
+    }
+
+    fn expand_grips(&self, seed: Pos, grips: &mut Vec<(Pos, usize)>) {
+        let mut points = vec![];
+        let mut pointset: hypermath::collections::ApproxHashMap<RotCircle, ()> =
+            hypermath::collections::approx_hashmap::ApproxHashMap::new();
+
+        let base_grips = GripSet {
+            circles: self.circles.clone(),
+        };
+        let mut gripsets = vec![base_grips.clone()];
+        let mut gripsetset: hypermath::collections::ApproxHashMap<GripSet, ()> =
+            hypermath::collections::approx_hashmap::ApproxHashMap::new();
+        gripsetset.insert(&base_grips, ());
+        for (i, g) in self
+            .circles
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.contains(&seed))
+        {
+            pointset.insert(&g, ());
+            points.push((g.circle.cen.clone(), i));
+        }
+
+        for i in 0..self.depth as usize {
+            if i >= gripsets.len() {
+                break;
+            }
+            for j in 0..gripsets[i].circles.len() {
+                if gripsets[i].circles[j].contains(&seed) {
+                    let new_set = gripsets[i].rotate_by(j);
+                    if gripsetset.insert(&new_set, ()).is_none() {
+                        for (i, grip) in new_set.circles.iter().enumerate() {
+                            if grip.contains(&seed) {
+                                if pointset.insert(&grip, ()).is_none() {
+                                    points.push((grip.circle.cen, i));
+                                }
+                            }
+                        }
+                        gripsets.push(new_set);
+                    }
+                }
+            }
+        }
+        *grips = points;
+    }
+
+    fn is_pixel_filled(&self, x: usize, y: usize, width: usize) -> bool {
+        self.pixel_mask[x + y * width]
+    }
+
+    fn fill_pixel_circle(
+        &mut self,
+        circle: &GraphicsCircle,
+        width: usize,
+        dpi: f32,
+        geom_to_egui: impl Fn(Pos) -> Pos2,
+        unit: f32,
+    ) {
+        let &GraphicsCircle {
+            centre: [x, y],
+            radius: r,
+            ..
+        } = circle;
+        let Pos2 { x, y } = geom_to_egui(Pos::new(x as f64, y as f64));
+        let r = r * unit;
+        let r = r * dpi;
+        let x = x * dpi;
+        let y = y * dpi;
+        let circle_top = ((y + r).floor() as usize).min(self.pixel_mask.len() / width - 1);
+        let circle_bottom = ((y - r).ceil() as usize).max(0);
+
+        for row in circle_bottom..=circle_top {
+            let row_height = row.abs_diff(y as usize);
+            let row_width = ((r * r) - (row_height * row_height) as f32).sqrt().floor() as usize;
+            let row_centre = x.floor() as isize;
+            let row_start = (row_centre - row_width as isize).clamp(0, width as isize) as usize;
+            let row_end = (row_centre + row_width as isize).clamp(0, width as isize) as usize;
+            self.pixel_mask[(row_start + row * width)..(row_end + row * width)].fill(true);
         }
     }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        let mut clear = false;
         egui::TopBottomPanel::bottom("Sliders").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     if ui.button("+").clicked() {
-                        self.circles = gen_circles(self.circles.len() + 1);
-                        clear = true;
+                        self.circle_count += 1;
+                        self.regenerate = true;
                     }
                     if ui.button("-").clicked() {
-                        if self.circles.len() > 1 {
-                            self.circles = gen_circles(self.circles.len() - 1);
-                            clear = true;
+                        if self.circle_count > 1 {
+                            self.circle_count -= 1;
+                            self.regenerate = true;
                         }
                     }
                     ui.checkbox(&mut self.grip_cuts, "All Cuts");
+                    ui.checkbox(&mut self.autofill, "Autofill");
+                    if ui.button("Reset").clicked() {
+                        self.regenerate = true;
+                    };
+                    if egui::ComboBox::from_label("Curvature")
+                        .selected_text(match self.curvature {
+                            Curvature::Spherical => "Spherical",
+                            Curvature::Euclidean => "Euclidean",
+                            Curvature::Hyperbolic => "Hyperbolic",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.curvature,
+                                Curvature::Euclidean,
+                                "Euclidean",
+                            );
+                            ui.selectable_value(
+                                &mut self.curvature,
+                                Curvature::Spherical,
+                                "Spherical",
+                            );
+                            ui.selectable_value(
+                                &mut self.curvature,
+                                Curvature::Hyperbolic,
+                                "Hyperbolic",
+                            );
+                        })
+                        .response
+                        .changed()
+                    {
+                        self.regenerate = true;
+                    }
                 });
                 ui.vertical(|ui| {
-                    clear |= ui
+                    self.reset |= ui
                         .add(egui::Slider::new(&mut self.scale, (0.1)..=(100.)).logarithmic(true))
                         .changed();
-                    clear |= ui
+                    self.reset |= ui
                         .add(egui::Slider::new(&mut self.depth, 100..=100000).logarithmic(true))
                         .changed();
-                    clear |= ui
+                    self.reset |= ui
                         .add(egui::Slider::new(&mut self.grip_rad, (0.)..=(0.1)))
+                        .changed();
+                    self.regenerate |= ui
+                        .add(egui::Slider::new(&mut self.circle_distance, (0.)..=(5.)))
                         .changed();
                 });
 
                 for circle in &mut self.circles {
                     ui.vertical(|ui| {
-                        clear |= ui
+                        self.reset |= ui
                             .add(
-                                egui::Slider::new(&mut circle.rad, (0.)..=(2.))
+                                egui::Slider::new(&mut circle.circle.rad, (0.)..=(2.))
                                     .clamp_to_range(false),
                             )
                             .changed();
-                        clear |= ui
+                        self.reset |= ui
                             .add(egui::Slider::new(&mut circle.step, 2..=16).clamp_to_range(false))
                             .changed();
-                        clear |= ui.checkbox(&mut circle.inverted, "Invert").clicked()
+                        self.reset |= ui.checkbox(&mut circle.inverted, "Invert").clicked()
                     });
                 }
             });
@@ -116,122 +315,77 @@ impl eframe::App for App {
             let scale = egui_rect.size() / egui_rect.height();
             let scale = [scale.x.recip() * self.scale, scale.y.recip() * self.scale];
 
-            // let trans_tup = (unit, cen.to_vec2() - (unit / 2. * vec2(1., 0.)));
-            let trans_tup = (unit, cen.to_vec2());
-            let trans = |pos| transform(pos, trans_tup);
-            let itrans = |pos| inv_transform(pos, trans_tup);
+            let geom_to_egui = |pos: Pos| pos2(pos.x as f32, -pos.y as f32) * unit + cen.to_vec2();
+            let egui_to_geom = |pos: Pos2| {
+                let pos = (pos - cen.to_vec2()) / unit;
+                Pos {
+                    x: pos.x as f64,
+                    y: -pos.y as f64,
+                }
+            };
+
+            if self.regenerate {
+                self.circles = gen_circles(self.circle_count, self.circle_distance, self.curvature);
+                self.reset = true;
+            }
+            if self.reset {
+                self.index = 0;
+                self.pixel_mask = bitbox![0; (target_size[0]*target_size[1]) as usize];
+            }
 
             let mut circles = vec![];
             let mut grips = vec![];
             if r.is_pointer_button_down_on() {
                 if let Some(mpos) = ctx.pointer_latest_pos() {
                     //let mpos = itrans(mpos);
-                    let seed = itrans(mpos);
-                    let seed = Pos::new(seed.x as f64, -seed.y as f64);
+                    let seed = egui_to_geom(mpos);
+                    // let seed = Pos::new(seed.x as f64, -seed.y as f64);
 
                     // Fill regions
                     if ui.input(|i| i.pointer.primary_down()) {
-                        let point_max_rad = |point: Pos| {
-                            self.circles
-                                .iter()
-                                .map(|c| (c.cen.dist(&point) - c.rad).abs())
-                                .reduce(f64::min)
-                                .expect("Oops, no circles")
-                        };
-                        let mut max_rad = point_max_rad(seed);
-                        let mut points = vec![(seed, 0)];
-                        let mut pointset: hypermath::collections::ApproxHashMap<Pos, ()> =
-                            hypermath::collections::approx_hashmap::ApproxHashMap::new();
-                        pointset.insert(&seed, ());
-                        for i in 0..self.depth as usize {
-                            if i >= points.len() {
-                                break;
-                            }
-                            for circle in &self.circles {
-                                if circle.contains(&points[i].0) {
-                                    let new = circle.rotate_point(points[i].0);
-                                    if pointset.insert(&new.into(), ()).is_none() {
-                                        points.push((new, i));
-                                        max_rad = max_rad.min(point_max_rad(new));
-                                    }
-                                }
-                            }
-                        }
-                        for point in &points {
-                            let col = if points.len() as u32 > self.depth {
-                                [0.5, 0.5, 0.5, 1.]
-                            } else {
-                                let col = colorous::SINEBOW.eval_rational(
-                                    (calculate_hash(&(points.len() + 1))) as u32 as usize,
-                                    u32::MAX as usize + 1,
-                                );
-                                [
-                                    col.r as f32 / 255.,
-                                    col.g as f32 / 255.,
-                                    col.b as f32 / 255.,
-                                    1.,
-                                ]
-                            };
-                            circles.push(Circle {
-                                centre: point.0.into(),
-                                radius: max_rad as f32,
-                                col,
-                            })
-                        }
+                        self.expand_seed(seed, &mut circles);
                     }
 
                     // Calculate grips
                     if ui.input(|i| i.pointer.secondary_down()) {
-                        let mut points = vec![];
-                        let mut pointset: hypermath::collections::ApproxHashMap<RotCircle, ()> =
-                            hypermath::collections::approx_hashmap::ApproxHashMap::new();
-
-                        let base_grips = GripSet {
-                            circles: self.circles.clone(),
-                        };
-                        let mut gripsets = vec![base_grips.clone()];
-                        let mut gripsetset: hypermath::collections::ApproxHashMap<GripSet, ()> =
-                            hypermath::collections::approx_hashmap::ApproxHashMap::new();
-                        gripsetset.insert(&base_grips, ());
-                        for (i, g) in self
-                            .circles
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, c)| c.contains(&seed))
-                        {
-                            pointset.insert(&g, ());
-                            points.push((g.cen.clone(), i));
-                        }
-
-                        for i in 0..self.depth as usize {
-                            if i >= gripsets.len() {
-                                break;
-                            }
-                            for j in 0..gripsets[i].circles.len() {
-                                if gripsets[i].circles[j].contains(&seed) {
-                                    let new_set = gripsets[i].rotate_by(j);
-                                    if gripsetset.insert(&new_set, ()).is_none() {
-                                        for (i, grip) in new_set.circles.iter().enumerate() {
-                                            if grip.contains(&seed) {
-                                                if pointset.insert(&grip, ()).is_none() {
-                                                    points.push((grip.cen, i));
-                                                }
-                                            }
-                                        }
-                                        gripsets.push(new_set);
-                                    }
-                                }
-                            }
-                        }
-                        grips = points;
+                        self.expand_grips(seed, &mut grips);
                     }
                 }
+            }
+
+            if self.autofill {
+                if self.pixel_mask.len() != (target_size[0] * target_size[1]) as usize {
+                    self.pixel_mask = bitbox![0; (target_size[0]*target_size[1]) as usize];
+                }
+                let time = std::time::Instant::now();
+                // let mut rng = thread_rng();
+                while time.elapsed() < std::time::Duration::from_millis(5) {
+                    if !self.is_pixel_filled(
+                        self.index % target_size[0] as usize,
+                        self.index / target_size[0] as usize,
+                        target_size[0] as usize,
+                    ) {
+                        let seed = egui_to_geom(pos2(
+                            (self.index % target_size[0] as usize) as f32,
+                            (self.index / target_size[0] as usize) as f32,
+                        ));
+                        self.expand_seed(seed, &mut circles);
+                    }
+                    self.index =
+                        (self.index + 1000000007) % (target_size[0] * target_size[1]) as usize;
+                    // self.index = (self.index + 1) % (target_size[0] * target_size[1]) as usize
+                }
+            }
+
+            for circle in &circles {
+                let dpi = ctx.pixels_per_point();
+                self.fill_pixel_circle(circle, target_size[0] as usize, dpi, geom_to_egui, unit);
             }
 
             let out_circles = if circles.len() > 0 {
                 circles.iter().map(|c| c.get_instance(scale)).collect()
             } else {
-                vec![Circle {
+                vec![GraphicsCircle {
                     centre: [f32::NAN; 2],
                     radius: f32::NAN,
                     col: [f32::NAN; 4],
@@ -249,45 +403,50 @@ impl eframe::App for App {
                         height: target_size[1],
                         depth_or_array_layers: 1,
                     },
-                    clear,
+                    clear: self.reset,
                 },
             ));
+            if self.curvature == Curvature::Hyperbolic {
+                painter.circle_stroke(cen, unit, (1., egui::Color32::LIGHT_GRAY));
+            }
             for (i, circle) in self.circles.iter().enumerate() {
-                let cen: Pos2 = circle.cen.into();
-                painter.circle_stroke(
-                    trans(pos2(cen.x, -cen.y)),
-                    circle.rad as f32 * unit,
-                    (4., gen_colors(i)),
-                );
+                let (cen, rad) = circle.euclidean_centre_radius();
+                painter.circle_stroke(geom_to_egui(cen), rad as f32 * unit, (4., gen_colors(i)));
             }
             for (grip, i) in grips {
-                // let cen: Pos2 = grip.cen.into();
-                let cen: Pos2 = grip.into();
-                let cen = trans(pos2(cen.x, -cen.y));
+                let circle = Circle::new(grip, self.grip_rad as f64, self.curvature);
+                let (cen, rad) = circle.euclidean_centre_radius();
+                let cen = geom_to_egui(cen);
                 painter.circle(
                     cen,
-                    self.grip_rad * unit,
+                    rad as f32 * unit,
                     gen_colors(i),
                     (2., egui::Color32::LIGHT_GRAY),
                 );
                 if self.grip_cuts {
-                    painter.circle_stroke(
-                        cen,
-                        self.circles[i].rad as f32 * unit,
-                        (2., egui::Color32::LIGHT_GRAY),
-                    );
+                    let circle = Circle::new(grip, self.circles[i].circle.rad, self.curvature);
+                    let (cen, rad) = circle.euclidean_centre_radius();
+                    let cen = geom_to_egui(cen);
+                    painter.circle_stroke(cen, rad as f32 * unit, (2., egui::Color32::LIGHT_GRAY));
                 }
             }
+            // pixel mask debug visual
+            // for i in (0..self.pixel_mask.len()).step_by(100) {
+            //     let dpi = ctx.pixels_per_point();
+            //     let (x, y) = (i % target_size[0] as usize, i / target_size[0] as usize);
+            //     if self.is_pixel_filled(x, y, target_size[0] as usize) {
+            //         painter.circle_filled(
+            //             pos2(x as f32 / dpi, y as f32 / dpi),
+            //             2.,
+            //             egui::Color32::GOLD,
+            //         );
+            //     }
+            // }
             ctx.request_repaint();
+            self.reset = false;
+            self.regenerate = false;
         });
     }
-}
-
-fn transform(pos: Pos2, transform: (f32, Vec2)) -> Pos2 {
-    (pos.to_vec2() * transform.0).to_pos2() + transform.1
-}
-fn inv_transform(pos: Pos2, transform: (f32, Vec2)) -> Pos2 {
-    ((pos - transform.1).to_vec2() / transform.0).to_pos2()
 }
 
 fn calculate_hash<T: std::hash::Hash>(t: &T) -> u64 {
@@ -321,7 +480,7 @@ impl hypermath::collections::approx_hashmap::ApproxHashMapKey for GripSet {
     ) -> Self::Hash {
         self.circles
             .iter()
-            .map(|circle| circle.cen.approx_hash(&mut float_hash_fn))
+            .map(|circle| circle.circle.cen.approx_hash(&mut float_hash_fn))
             .collect()
     }
 }
