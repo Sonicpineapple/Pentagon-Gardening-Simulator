@@ -32,7 +32,7 @@ impl From<Pos> for [f32; 2] {
 }
 impl Pos {
     pub const ORIGIN: Self = Pos { x: 0., y: 0. };
-    pub fn new(x: f64, y: f64) -> Self {
+    pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
     pub fn dist_sq(self, other: &Pos) -> f64 {

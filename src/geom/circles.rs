@@ -36,7 +36,8 @@ impl Circle {
         self.cen.dist_in_space(point, self.curvature) < self.rad
     }
 
-    pub fn euclidean_centre_radius(&self) -> (Pos, f64) {
+    pub fn euclidean_centre_radius(&self, transform: &MobiusTransform) -> (Pos, f64) {
+        let transformed_cen = transform.apply_to(self.cen);
         match self.curvature {
             Curvature::Spherical => {
                 // let t = (self.rad.tan().powi(2) + 1.).sqrt();
@@ -47,8 +48,8 @@ impl Circle {
                 // let qm =
                 // (am + self.cen.dist(&Pos::ORIGIN)) / (1. - am * self.cen.dist(&Pos::ORIGIN));
 
-                let p_mod = self.cen.dist(&Pos::ORIGIN);
-                let p_mod_sq = self.cen.dist_sq(&Pos::ORIGIN);
+                let p_mod = transformed_cen.dist(&Pos::ORIGIN);
+                let p_mod_sq = transformed_cen.dist_sq(&Pos::ORIGIN);
 
                 let (s, c) = self.rad.sin_cos();
                 let qp = (2. * c * p_mod - (p_mod_sq - 1.) * s)
@@ -56,18 +57,18 @@ impl Circle {
                 let qm = (2. * c * p_mod + (p_mod_sq - 1.) * s)
                     / (1. + c + p_mod_sq * (1. - c) + 2. * p_mod * s);
 
-                let cen = if self.cen.dist(&Pos::ORIGIN) == 0. {
+                let cen = if transformed_cen.dist(&Pos::ORIGIN) == 0. {
                     Pos::ORIGIN
                 } else {
-                    (qp + qm) / (2. * self.cen.dist(&Pos::ORIGIN)) * self.cen
+                    (qp + qm) / (2. * transformed_cen.dist(&Pos::ORIGIN)) * transformed_cen
                 };
                 let rad = (qp - qm) / 2.;
                 (cen, rad.abs())
             }
-            Curvature::Euclidean => (self.cen, self.rad),
+            Curvature::Euclidean => (transformed_cen, self.rad),
             Curvature::Hyperbolic => {
-                let p_mod = self.cen.dist(&Pos::ORIGIN);
-                let p_mod_sq = self.cen.dist_sq(&Pos::ORIGIN);
+                let p_mod = transformed_cen.dist(&Pos::ORIGIN);
+                let p_mod_sq = transformed_cen.dist_sq(&Pos::ORIGIN);
 
                 let (s, c) = (self.rad.sinh(), self.rad.cosh());
                 let qp = -(-2. * c * p_mod + p_mod_sq * s + s)
@@ -75,10 +76,10 @@ impl Circle {
                 let qm = -(-2. * c * p_mod - p_mod_sq * s - s)
                     / (c * p_mod_sq + c - p_mod_sq + 2. * p_mod * s + 1.);
 
-                let cen = if self.cen.dist(&Pos::ORIGIN) == 0. {
+                let cen = if transformed_cen.dist(&Pos::ORIGIN) == 0. {
                     Pos::ORIGIN
                 } else {
-                    (qp + qm) / (2. * self.cen.dist(&Pos::ORIGIN)) * self.cen
+                    (qp + qm) / (2. * transformed_cen.dist(&Pos::ORIGIN)) * transformed_cen
                 };
                 let rad = (qp - qm) / 2.;
                 (cen, rad.abs())
@@ -89,7 +90,7 @@ impl Circle {
 
 use crate::Pos;
 
-use super::Curvature;
+use super::{Curvature, MobiusTransform};
 #[derive(Debug, Clone)]
 pub(crate) struct RotCircle {
     pub circle: Circle,
@@ -175,8 +176,8 @@ impl RotCircle {
         self.circle.contains(point) ^ self.inverted
     }
 
-    pub fn euclidean_centre_radius(&self) -> (Pos, f64) {
-        self.circle.euclidean_centre_radius()
+    pub fn euclidean_centre_radius(&self, transform: &MobiusTransform) -> (Pos, f64) {
+        self.circle.euclidean_centre_radius(transform)
     }
 }
 

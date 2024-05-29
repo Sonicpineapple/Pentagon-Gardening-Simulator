@@ -4,11 +4,13 @@ use bitvec::prelude::*;
 use eframe::egui::{self, pos2, vec2, Pos2, Vec2};
 
 mod geom;
-use geom::{Circle, Curvature, GraphicsCircle, Pos, RotCircle};
+use geom::{Circle, Curvature, GraphicsCircle, MobiusTransform, Pos, RotCircle};
+mod puzzle;
 
 mod gfx;
 use gfx::GraphicsState;
 use itertools::Itertools;
+use puzzle::{Grip, Piece};
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -50,8 +52,14 @@ fn gen_colors(i: usize) -> egui::Color32 {
     return egui::Color32::GOLD;
 }
 
+struct PieceData {
+    grip_count: u32,
+    orbit_size: u32,
+}
+
 struct App {
     gfx: Arc<GraphicsState>,
+    /// Transformation circles
     circles: Vec<RotCircle>,
     scale: f32,
     depth: u32,
@@ -65,7 +73,11 @@ struct App {
     circle_count: usize,
     /// Whether drawing parameters have changed
     reset: bool,
+    /// Whether geometric parameters have changed
     regenerate: bool,
+    /// Data for the currently hovered piece
+    piece_data: Option<PieceData>,
+    camera: MobiusTransform,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -86,6 +98,8 @@ impl App {
             circle_count: 2,
             reset: true,
             regenerate: true,
+            piece_data: None,
+            camera: MobiusTransform::IDENT,
         }
     }
 
@@ -131,9 +145,9 @@ impl App {
                     1.,
                 ]
             };
-            max_rad = max_rad.min(point.0.dist_to_inf(self.curvature));
+            max_rad = max_rad.min(self.camera.apply_to(point.0).dist_to_inf(self.curvature));
             let (cen, rad) =
-                Circle::new(point.0, max_rad, self.curvature).euclidean_centre_radius();
+                Circle::new(point.0, max_rad, self.curvature).euclidean_centre_radius(&self.camera);
             circles.push(GraphicsCircle {
                 centre: cen.into(),
                 radius: rad as f32,
@@ -142,26 +156,26 @@ impl App {
         }
     }
 
-    fn expand_grips(&self, seed: Pos, grips: &mut Vec<(Pos, usize)>) {
-        let mut points = vec![];
-        let mut pointset: hypermath::collections::ApproxHashMap<RotCircle, ()> =
+    fn expand_piece(&mut self, seed: Pos) -> Piece {
+        let mut grips = vec![];
+        let mut piece_grip_set: hypermath::collections::ApproxHashMap<RotCircle, ()> =
             hypermath::collections::approx_hashmap::ApproxHashMap::new();
 
         let base_grips = GripSet {
             circles: self.circles.clone(),
         };
         let mut gripsets = vec![base_grips.clone()];
-        let mut gripsetset: hypermath::collections::ApproxHashMap<GripSet, ()> =
+        let mut gripset_set: hypermath::collections::ApproxHashMap<GripSet, ()> =
             hypermath::collections::approx_hashmap::ApproxHashMap::new();
-        gripsetset.insert(&base_grips, ());
+        gripset_set.insert(&base_grips, ());
         for (i, g) in self
             .circles
             .iter()
             .enumerate()
             .filter(|(_, c)| c.contains(&seed))
         {
-            pointset.insert(&g, ());
-            points.push((g.circle.cen.clone(), i));
+            piece_grip_set.insert(&g, ());
+            grips.push(Grip::new(g.circle.cen.clone(), i));
         }
 
         for i in 0..self.depth as usize {
@@ -171,11 +185,11 @@ impl App {
             for j in 0..gripsets[i].circles.len() {
                 if gripsets[i].circles[j].contains(&seed) {
                     let new_set = gripsets[i].rotate_by(j);
-                    if gripsetset.insert(&new_set, ()).is_none() {
+                    if gripset_set.insert(&new_set, ()).is_none() {
                         for (i, grip) in new_set.circles.iter().enumerate() {
                             if grip.contains(&seed) {
-                                if pointset.insert(&grip, ()).is_none() {
-                                    points.push((grip.circle.cen, i));
+                                if piece_grip_set.insert(&grip, ()).is_none() {
+                                    grips.push(Grip::new(grip.circle.cen, i));
                                 }
                             }
                         }
@@ -184,7 +198,12 @@ impl App {
                 }
             }
         }
-        *grips = points;
+        // *grips = points;
+        self.piece_data = Some(PieceData {
+            grip_count: grips.len() as u32,
+            orbit_size: 0,
+        });
+        Piece::new(grips)
     }
 
     fn is_pixel_filled(&self, x: usize, y: usize, width: usize) -> bool {
@@ -239,9 +258,14 @@ impl eframe::App for App {
                     }
                     ui.checkbox(&mut self.grip_cuts, "All Cuts");
                     ui.checkbox(&mut self.autofill, "Autofill");
-                    if ui.button("Reset").clicked() {
-                        self.regenerate = true;
-                    };
+                    ui.horizontal(|ui| {
+                        if ui.button("Reset").clicked() {
+                            self.regenerate = true;
+                        };
+                        if ui.button("Redraw").clicked() {
+                            self.reset = true;
+                        }
+                    });
                     if egui::ComboBox::from_label("Curvature")
                         .selected_text(match self.curvature {
                             Curvature::Spherical => "Spherical",
@@ -273,7 +297,11 @@ impl eframe::App for App {
                 });
                 ui.vertical(|ui| {
                     self.reset |= ui
-                        .add(egui::Slider::new(&mut self.scale, (0.1)..=(100.)).logarithmic(true))
+                        .add(
+                            egui::Slider::new(&mut self.scale, (0.1)..=(100.))
+                                .logarithmic(true)
+                                .clamp_to_range(false),
+                        )
                         .changed();
                     self.reset |= ui
                         .add(egui::Slider::new(&mut self.depth, 100..=100000).logarithmic(true))
@@ -284,6 +312,12 @@ impl eframe::App for App {
                     self.regenerate |= ui
                         .add(egui::Slider::new(&mut self.circle_distance, (0.)..=(5.)))
                         .changed();
+                    if let Some(data) = &self.piece_data {
+                        ui.label(format!(
+                            "{} grips, {} orbit size",
+                            data.grip_count, data.orbit_size
+                        ));
+                    }
                 });
 
                 for circle in &mut self.circles {
@@ -315,8 +349,9 @@ impl eframe::App for App {
             let scale = egui_rect.size() / egui_rect.height();
             let scale = [scale.x.recip() * self.scale, scale.y.recip() * self.scale];
 
-            let geom_to_egui = |pos: Pos| pos2(pos.x as f32, -pos.y as f32) * unit + cen.to_vec2();
-            let egui_to_geom = |pos: Pos2| {
+            let screen_to_egui =
+                |pos: Pos| pos2(pos.x as f32, -pos.y as f32) * unit + cen.to_vec2();
+            let egui_to_screen = |pos: Pos2| {
                 let pos = (pos - cen.to_vec2()) / unit;
                 Pos {
                     x: pos.x as f64,
@@ -324,14 +359,85 @@ impl eframe::App for App {
                 }
             };
 
+            if r.dragged_by(egui::PointerButton::Middle) {
+                if r.drag_delta().length() > 0.1 {
+                    let drag = r.drag_delta() / unit;
+                    let drag = Pos::new(drag.x as f64, -drag.y as f64);
+                    let transform_delta = match self.curvature {
+                        Curvature::Spherical => {
+                            if let Some(mpos) = r.interact_pointer_pos() {
+                                let root_pos = egui_to_screen(mpos - r.drag_delta());
+                                let end_pos = egui_to_screen(mpos);
+
+                                let to_origin = MobiusTransform::new([
+                                    [Pos::new(1., 0.), -root_pos],
+                                    [root_pos.conjugate(), Pos::new(1., 0.)],
+                                ]);
+                                let transformed_end_pos = to_origin.apply_to(end_pos);
+                                let inner_transform = MobiusTransform::new([
+                                    [Pos::new(1., 0.), transformed_end_pos],
+                                    [-transformed_end_pos.conjugate(), Pos::new(1., 0.)],
+                                ]);
+
+                                to_origin.inverse() * inner_transform * to_origin
+                                // MobiusTransform::new([
+                                //     [Pos::new(1., 0.), drag],
+                                //     [-drag.conjugate(), Pos::new(1., 0.)],
+                                // ])
+                            } else {
+                                MobiusTransform::IDENT
+                            }
+                        }
+                        Curvature::Euclidean => MobiusTransform::new([
+                            [Pos::new(1., 0.), drag],
+                            [Pos::new(0., 0.), Pos::new(1., 0.)],
+                        ]),
+                        Curvature::Hyperbolic => {
+                            if let Some(mpos) = r.interact_pointer_pos() {
+                                let root_pos = egui_to_screen(mpos - r.drag_delta());
+                                let end_pos = egui_to_screen(mpos);
+
+                                let to_origin = MobiusTransform::new([
+                                    [Pos::new(1., 0.), -root_pos],
+                                    [-root_pos.conjugate(), Pos::new(1., 0.)],
+                                ]);
+                                let transformed_end_pos = to_origin.apply_to(end_pos);
+                                let inner_transform = MobiusTransform::new([
+                                    [Pos::new(1., 0.), transformed_end_pos],
+                                    [transformed_end_pos.conjugate(), Pos::new(1., 0.)],
+                                ]);
+
+                                to_origin.inverse() * inner_transform * to_origin
+
+                            // MobiusTransform::new([
+                            // [Pos::new(1., 0.), drag],
+                            // [drag.conjugate(), Pos::new(1., 0.)],
+                            // ])
+                            } else {
+                                MobiusTransform::IDENT
+                            }
+                        }
+                    };
+                    self.camera = transform_delta * self.camera.clone();
+                    self.camera.normalise(self.curvature);
+                    self.reset = true;
+                }
+            }
+
             if self.regenerate {
                 self.circles = gen_circles(self.circle_count, self.circle_distance, self.curvature);
+                self.camera = MobiusTransform::IDENT;
                 self.reset = true;
             }
             if self.reset {
                 self.index = 0;
                 self.pixel_mask = bitbox![0; (target_size[0]*target_size[1]) as usize];
             }
+
+            let camera = self.camera.clone();
+
+            let geom_to_egui = |pos: Pos| screen_to_egui(camera.apply_to(pos));
+            let egui_to_geom = |pos: Pos2| camera.inverse().apply_to(egui_to_screen(pos));
 
             let mut circles = vec![];
             let mut grips = vec![];
@@ -348,7 +454,7 @@ impl eframe::App for App {
 
                     // Calculate grips
                     if ui.input(|i| i.pointer.secondary_down()) {
-                        self.expand_grips(seed, &mut grips);
+                        grips.extend(self.expand_piece(seed).grips().clone());
                     }
                 }
             }
@@ -379,7 +485,7 @@ impl eframe::App for App {
 
             for circle in &circles {
                 let dpi = ctx.pixels_per_point();
-                self.fill_pixel_circle(circle, target_size[0] as usize, dpi, geom_to_egui, unit);
+                self.fill_pixel_circle(circle, target_size[0] as usize, dpi, screen_to_egui, unit);
             }
 
             let out_circles = if circles.len() > 0 {
@@ -410,23 +516,23 @@ impl eframe::App for App {
                 painter.circle_stroke(cen, unit, (1., egui::Color32::LIGHT_GRAY));
             }
             for (i, circle) in self.circles.iter().enumerate() {
-                let (cen, rad) = circle.euclidean_centre_radius();
-                painter.circle_stroke(geom_to_egui(cen), rad as f32 * unit, (4., gen_colors(i)));
+                let (cen, rad) = circle.euclidean_centre_radius(&self.camera);
+                painter.circle_stroke(screen_to_egui(cen), rad as f32 * unit, (4., gen_colors(i)));
             }
-            for (grip, i) in grips {
-                let circle = Circle::new(grip, self.grip_rad as f64, self.curvature);
-                let (cen, rad) = circle.euclidean_centre_radius();
-                let cen = geom_to_egui(cen);
+            for Grip { pos, id } in grips {
+                let circle = Circle::new(pos, self.grip_rad as f64, self.curvature);
+                let (cen, rad) = circle.euclidean_centre_radius(&self.camera);
+                let cen = screen_to_egui(cen);
                 painter.circle(
                     cen,
                     rad as f32 * unit,
-                    gen_colors(i),
+                    gen_colors(id),
                     (2., egui::Color32::LIGHT_GRAY),
                 );
                 if self.grip_cuts {
-                    let circle = Circle::new(grip, self.circles[i].circle.rad, self.curvature);
-                    let (cen, rad) = circle.euclidean_centre_radius();
-                    let cen = geom_to_egui(cen);
+                    let circle = Circle::new(pos, self.circles[id].circle.rad, self.curvature);
+                    let (cen, rad) = circle.euclidean_centre_radius(&self.camera);
+                    let cen = screen_to_egui(cen);
                     painter.circle_stroke(cen, rad as f32 * unit, (2., egui::Color32::LIGHT_GRAY));
                 }
             }
