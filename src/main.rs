@@ -66,6 +66,7 @@ struct App {
     grip_cuts: bool,
     autofill: bool,
     index: usize,
+    color_seed: u64,
     pixel_mask: BitBox,
     curvature: Curvature,
     circle_distance: f64,
@@ -93,6 +94,7 @@ impl App {
             grip_cuts: false,
             autofill: false,
             index: 0,
+            color_seed: 0,
             pixel_mask: BitVec::EMPTY.into_boxed_bitslice(),
             curvature: Curvature::Euclidean,
             circle_distance: 1.,
@@ -136,7 +138,7 @@ impl App {
                 [0.5, 0.5, 0.5, 1.]
             } else {
                 let col = colorous::SINEBOW.eval_rational(
-                    (calculate_hash(&(points.len() + 1))) as u32 as usize,
+                    (calculate_hash(&(points.len() + 1, self.color_seed))) as u32 as usize,
                     u32::MAX as usize + 1,
                 );
                 [
@@ -260,6 +262,10 @@ impl eframe::App for App {
                     ui.checkbox(&mut self.grip_draw, "Draw Grips");
                     ui.checkbox(&mut self.grip_cuts, "Grip Cuts");
                     ui.checkbox(&mut self.autofill, "Autofill");
+                    if ui.button("Recolor").clicked() {
+                        self.color_seed += 1;
+                        self.regenerate = true;
+                    };
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
                             self.regenerate = true;
