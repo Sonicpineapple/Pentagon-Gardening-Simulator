@@ -55,7 +55,12 @@ impl RenderPipelineDescriptor<'_> {
                 module: shader_module,
                 entry_point: Some(&vertex_entry_point),
                 compilation_options: Default::default(),
-                buffers: &self.vertex_buffers.iter().cloned().map(Some).collect::<Vec<_>>(),
+                buffers: &self
+                    .vertex_buffers
+                    .iter()
+                    .cloned()
+                    .map(Some)
+                    .collect::<Vec<_>>(),
             },
             primitive: self.primitive,
             depth_stencil: self.depth_stencil,

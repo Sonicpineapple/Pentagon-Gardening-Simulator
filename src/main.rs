@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bitvec::prelude::*;
-use eframe::egui::{self, pos2, Pos2};
+use eframe::egui::{self, Pos2, pos2};
 
 mod geom;
 use geom::{Circle, Curvature, GraphicsCircle, MobiusTransform, Pos, RotCircle};
@@ -60,6 +60,7 @@ struct App {
     circles: Vec<RotCircle>,
     scale: f32,
     depth: u32,
+    grip_draw: bool,
     grip_rad: f32,
     grip_cuts: bool,
     autofill: bool,
@@ -86,6 +87,7 @@ impl App {
             circles: vec![],
             scale: 0.5,
             depth: 500,
+            grip_draw: false,
             grip_rad: 0.05,
             grip_cuts: false,
             autofill: false,
@@ -254,7 +256,8 @@ impl eframe::App for App {
                             self.regenerate = true;
                         }
                     });
-                    ui.checkbox(&mut self.grip_cuts, "All Cuts");
+                    ui.checkbox(&mut self.grip_draw, "Draw Grips");
+                    ui.checkbox(&mut self.grip_cuts, "Grip Cuts");
                     ui.checkbox(&mut self.autofill, "Autofill");
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
@@ -378,7 +381,7 @@ impl eframe::App for App {
                 }
             };
 
-            if r.dragged_by(egui::PointerButton::Middle) && r.drag_delta().length() > 0.1 {
+            if r.dragged_by(egui::PointerButton::Primary) && r.drag_delta().length() > 0.1 {
                 let drag = r.drag_delta() / unit;
                 let drag = Pos::new(drag.x as f64, -drag.y as f64);
                 let transform_delta = match self.curvature {
@@ -458,22 +461,21 @@ impl eframe::App for App {
 
             let mut circles = vec![];
             let mut grips = vec![];
-            if r.is_pointer_button_down_on()
-                && let Some(mpos) = ctx.pointer_latest_pos() {
-                    //let mpos = itrans(mpos);
-                    let seed = egui_to_geom(mpos);
-                    // let seed = Pos::new(seed.x as f64, -seed.y as f64);
+            if let Some(mpos) = ctx.pointer_latest_pos() {
+                //let mpos = itrans(mpos);
+                let seed = egui_to_geom(mpos);
+                // let seed = Pos::new(seed.x as f64, -seed.y as f64);
 
-                    // Fill regions
-                    if ui.input(|i| i.pointer.primary_down()) {
-                        self.expand_seed(seed, &mut circles);
-                    }
-
-                    // Calculate grips
-                    if ui.input(|i| i.pointer.secondary_down()) {
-                        grips.extend(self.expand_piece(seed).grips().clone());
-                    }
+                // Fill regions
+                if ui.input(|i| i.pointer.secondary_down()) {
+                    self.expand_seed(seed, &mut circles);
                 }
+
+                // Calculate grips
+                if self.grip_draw {
+                    grips.extend(self.expand_piece(seed).grips().clone());
+                }
+            }
 
             if self.autofill {
                 if self.pixel_mask.len() != (target_size[0] * target_size[1]) as usize {
@@ -507,12 +509,14 @@ impl eframe::App for App {
             let out_circles = if !circles.is_empty() {
                 circles.iter().map(|c| c.get_instance(scale)).collect()
             } else {
-                vec![GraphicsCircle {
-                    centre: [f32::NAN; 2],
-                    radius: f32::NAN,
-                    col: [f32::NAN; 4],
-                }
-                .get_instance(scale)]
+                vec![
+                    GraphicsCircle {
+                        centre: [f32::NAN; 2],
+                        radius: f32::NAN,
+                        col: [f32::NAN; 4],
+                    }
+                    .get_instance(scale),
+                ]
             };
             let painter = ui.painter_at(egui_rect);
             painter.add(eframe::egui_wgpu::Callback::new_paint_callback(

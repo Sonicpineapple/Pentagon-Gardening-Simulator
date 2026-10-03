@@ -9,8 +9,8 @@ use eframe::{
 use crate::gfx::structs::CircleInstance;
 
 use super::{
-    bindings::{BindGroups, WgpuPassExt},
     GraphicsState,
+    bindings::{BindGroups, WgpuPassExt},
 };
 
 pub(crate) struct RenderResources {
