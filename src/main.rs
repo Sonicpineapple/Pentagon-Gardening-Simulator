@@ -361,15 +361,42 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             let (cen, size) = (rect.center(), rect.size());
-            let unit = size.min_elem() * self.scale / 2.;
 
             // Allocate space in the UI.
             let (egui_rect, target_size) =
                 rounded_pixel_rect(ui, ui.available_rect_before_wrap(), 1);
             let r = ui.allocate_rect(egui_rect, egui::Sense::click_and_drag());
 
-            let scale = egui_rect.size() / egui_rect.height();
-            let scale = [scale.x.recip() * self.scale, scale.y.recip() * self.scale];
+            // Zoom with the scroll wheel or trackpad pinch.
+            if let Some(mpos) = r.hover_pos() {
+                let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+                let factor = pinch * (scroll * 0.002).exp();
+                if factor != 1. {
+                    // Scaling the view moves the point under the cursor from
+                    // `s` to `s / factor` in screen space, so move it back.
+                    let unit = size.min_elem() * self.scale / 2.;
+                    let s = (mpos - cen) / unit;
+                    let s = Pos::new(s.x as f64, -s.y as f64);
+                    let shrunk = (1. / factor as f64) * s;
+                    // Hyperbolic isometries only keep the disk in place for
+                    // points inside it, so zoom about the origin otherwise.
+                    let inside_disk = |p: Pos| p.dist_sq(&Pos::ORIGIN) < 1.;
+                    if self.curvature != Curvature::Hyperbolic
+                        || (inside_disk(s) && inside_disk(shrunk))
+                    {
+                        self.camera =
+                            isometry_moving(self.curvature, s, shrunk) * self.camera.clone();
+                        self.camera.normalise(self.curvature);
+                    }
+                    self.scale *= factor;
+                    self.reset = true;
+                }
+            }
+            let unit = size.min_elem() * self.scale / 2.;
+
+            // Screen space to clip space, matching `unit` so the GPU fills
+            // line up with the egui overlay.
+            let scale = [2. * unit / egui_rect.width(), 2. * unit / egui_rect.height()];
 
             let screen_to_egui =
                 |pos: Pos| pos2(pos.x as f32, -pos.y as f32) * unit + cen.to_vec2();
@@ -381,65 +408,14 @@ impl eframe::App for App {
                 }
             };
 
-            if r.dragged_by(egui::PointerButton::Primary) && r.drag_delta().length() > 0.1 {
-                let drag = r.drag_delta() / unit;
-                let drag = Pos::new(drag.x as f64, -drag.y as f64);
-                let transform_delta = match self.curvature {
-                    Curvature::Spherical => {
-                        if let Some(mpos) = r.interact_pointer_pos() {
-                            let root_pos = egui_to_screen(mpos - r.drag_delta());
-                            let end_pos = egui_to_screen(mpos);
-
-                            let to_origin = MobiusTransform::new([
-                                [Pos::new(1., 0.), -root_pos],
-                                [root_pos.conjugate(), Pos::new(1., 0.)],
-                            ]);
-                            let transformed_end_pos = to_origin.apply_to(end_pos);
-                            let inner_transform = MobiusTransform::new([
-                                [Pos::new(1., 0.), transformed_end_pos],
-                                [-transformed_end_pos.conjugate(), Pos::new(1., 0.)],
-                            ]);
-
-                            to_origin.inverse() * inner_transform * to_origin
-                            // MobiusTransform::new([
-                            //     [Pos::new(1., 0.), drag],
-                            //     [-drag.conjugate(), Pos::new(1., 0.)],
-                            // ])
-                        } else {
-                            MobiusTransform::IDENT
-                        }
-                    }
-                    Curvature::Euclidean => MobiusTransform::new([
-                        [Pos::new(1., 0.), drag],
-                        [Pos::new(0., 0.), Pos::new(1., 0.)],
-                    ]),
-                    Curvature::Hyperbolic => {
-                        if let Some(mpos) = r.interact_pointer_pos() {
-                            let root_pos = egui_to_screen(mpos - r.drag_delta());
-                            let end_pos = egui_to_screen(mpos);
-
-                            let to_origin = MobiusTransform::new([
-                                [Pos::new(1., 0.), -root_pos],
-                                [-root_pos.conjugate(), Pos::new(1., 0.)],
-                            ]);
-                            let transformed_end_pos = to_origin.apply_to(end_pos);
-                            let inner_transform = MobiusTransform::new([
-                                [Pos::new(1., 0.), transformed_end_pos],
-                                [transformed_end_pos.conjugate(), Pos::new(1., 0.)],
-                            ]);
-
-                            to_origin.inverse() * inner_transform * to_origin
-
-                        // MobiusTransform::new([
-                        // [Pos::new(1., 0.), drag],
-                        // [drag.conjugate(), Pos::new(1., 0.)],
-                        // ])
-                        } else {
-                            MobiusTransform::IDENT
-                        }
-                    }
-                };
-                self.camera = transform_delta * self.camera.clone();
+            if r.dragged_by(egui::PointerButton::Primary)
+                && r.drag_delta().length() > 0.1
+                && let Some(mpos) = r.interact_pointer_pos()
+            {
+                let root_pos = egui_to_screen(mpos - r.drag_delta());
+                let end_pos = egui_to_screen(mpos);
+                self.camera =
+                    isometry_moving(self.curvature, root_pos, end_pos) * self.camera.clone();
                 self.camera.normalise(self.curvature);
                 self.reset = true;
             }
@@ -572,6 +548,43 @@ impl eframe::App for App {
             self.reset = false;
             self.regenerate = false;
         });
+    }
+}
+
+/// Returns an isometry of the given geometry
+/// that takes `root_pos` to `end_pos`, both in screen space.
+fn isometry_moving(curvature: Curvature, root_pos: Pos, end_pos: Pos) -> MobiusTransform {
+    match curvature {
+        Curvature::Spherical => {
+            let to_origin = MobiusTransform::new([
+                [Pos::new(1., 0.), -root_pos],
+                [root_pos.conjugate(), Pos::new(1., 0.)],
+            ]);
+            let transformed_end_pos = to_origin.apply_to(end_pos);
+            let inner_transform = MobiusTransform::new([
+                [Pos::new(1., 0.), transformed_end_pos],
+                [-transformed_end_pos.conjugate(), Pos::new(1., 0.)],
+            ]);
+
+            to_origin.inverse() * inner_transform * to_origin
+        }
+        Curvature::Euclidean => MobiusTransform::new([
+            [Pos::new(1., 0.), end_pos - root_pos],
+            [Pos::new(0., 0.), Pos::new(1., 0.)],
+        ]),
+        Curvature::Hyperbolic => {
+            let to_origin = MobiusTransform::new([
+                [Pos::new(1., 0.), -root_pos],
+                [-root_pos.conjugate(), Pos::new(1., 0.)],
+            ]);
+            let transformed_end_pos = to_origin.apply_to(end_pos);
+            let inner_transform = MobiusTransform::new([
+                [Pos::new(1., 0.), transformed_end_pos],
+                [transformed_end_pos.conjugate(), Pos::new(1., 0.)],
+            ]);
+
+            to_origin.inverse() * inner_transform * to_origin
+        }
     }
 }
 
