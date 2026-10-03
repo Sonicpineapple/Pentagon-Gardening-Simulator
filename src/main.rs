@@ -13,14 +13,11 @@ use itertools::Itertools;
 use puzzle::{Grip, Piece};
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
-        follow_system_theme: false,
-        ..Default::default()
-    };
+    let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "Pentagon Gardening Simulator",
         native_options,
-        Box::new(|cc| Box::new(App::new(cc))),
+        Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
 }
 
@@ -81,6 +78,7 @@ struct App {
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
         Self {
             gfx: Arc::new(GraphicsState::new(
                 cc.wgpu_render_state.as_ref().expect("No render state"),
@@ -240,8 +238,9 @@ impl App {
     }
 }
 impl eframe::App for App {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::bottom("Sliders").show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        egui::Panel::bottom("Sliders").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -300,7 +299,7 @@ impl eframe::App for App {
                             .add(
                                 egui::Slider::new(&mut self.scale, (0.1)..=100.)
                                     .logarithmic(true)
-                                    .clamp_to_range(false),
+                                    .clamping(egui::SliderClamping::Never),
                             )
                             .labelled_by(ui.label("Scale").id)
                             .changed();
@@ -337,7 +336,7 @@ impl eframe::App for App {
                             self.reset |= ui
                                 .add(
                                     egui::Slider::new(&mut circle.circle.rad, (0.)..=2.)
-                                        .clamp_to_range(false),
+                                        .clamping(egui::SliderClamping::Never),
                                 )
                                 .labelled_by(ui.label("Radius").id)
                                 .changed();
@@ -346,7 +345,7 @@ impl eframe::App for App {
                             self.reset |= ui
                                 .add(
                                     egui::Slider::new(&mut circle.step, 2..=16)
-                                        .clamp_to_range(false),
+                                        .clamping(egui::SliderClamping::Never),
                                 )
                                 .labelled_by(ui.label("Step").id)
                                 .changed();
@@ -356,7 +355,7 @@ impl eframe::App for App {
                 }
             });
         });
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             let (cen, size) = (rect.center(), rect.size());
             let unit = size.min_elem() * self.scale / 2.;
@@ -459,8 +458,8 @@ impl eframe::App for App {
 
             let mut circles = vec![];
             let mut grips = vec![];
-            if r.is_pointer_button_down_on() {
-                if let Some(mpos) = ctx.pointer_latest_pos() {
+            if r.is_pointer_button_down_on()
+                && let Some(mpos) = ctx.pointer_latest_pos() {
                     //let mpos = itrans(mpos);
                     let seed = egui_to_geom(mpos);
                     // let seed = Pos::new(seed.x as f64, -seed.y as f64);
@@ -475,7 +474,6 @@ impl eframe::App for App {
                         grips.extend(self.expand_piece(seed).grips().clone());
                     }
                 }
-            }
 
             if self.autofill {
                 if self.pixel_mask.len() != (target_size[0] * target_size[1]) as usize {

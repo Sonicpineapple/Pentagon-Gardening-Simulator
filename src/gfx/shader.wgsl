@@ -55,7 +55,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) col: vec4<f32>,
     @location(1) offset: vec2<f32>,
-    @location(2) idx: u32,
+    @location(2) @interpolate(flat) idx: u32,
 }
 
 @fragment

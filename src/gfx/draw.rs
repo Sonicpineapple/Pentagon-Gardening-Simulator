@@ -78,6 +78,7 @@ impl eframe::egui_wgpu::CallbackTrait for RenderResources {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: if self.clear {
@@ -91,6 +92,7 @@ impl eframe::egui_wgpu::CallbackTrait for RenderResources {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         render_pass.set_pipeline(&self.gfx.circle_pipeline.pipeline);
         render_pass.set_bind_groups(&bind_groups);
@@ -115,11 +117,11 @@ impl eframe::egui_wgpu::CallbackTrait for RenderResources {
         vec![]
     }
 
-    fn paint<'a>(
-        &'a self,
+    fn paint(
+        &self,
         _info: egui::PaintCallbackInfo,
-        render_pass: &mut eframe::wgpu::RenderPass<'a>,
-        callback_resources: &'a eframe::egui_wgpu::CallbackResources,
+        render_pass: &mut eframe::wgpu::RenderPass<'static>,
+        callback_resources: &eframe::egui_wgpu::CallbackResources,
     ) {
         let Some(bind_groups) = callback_resources.get::<BindGroups>() else {
             panic!("lost bind groups for blitting puzzle view");

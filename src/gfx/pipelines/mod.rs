@@ -53,18 +53,21 @@ impl RenderPipelineDescriptor<'_> {
             layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader_module,
-                entry_point: &vertex_entry_point,
-                buffers: self.vertex_buffers,
+                entry_point: Some(&vertex_entry_point),
+                compilation_options: Default::default(),
+                buffers: &self.vertex_buffers.iter().cloned().map(Some).collect::<Vec<_>>(),
             },
             primitive: self.primitive,
             depth_stencil: self.depth_stencil,
             multisample: self.multisample,
             fragment: Some(wgpu::FragmentState {
                 module: shader_module,
-                entry_point: &fragment_entry_point,
+                entry_point: Some(&fragment_entry_point),
+                compilation_options: Default::default(),
                 targets: &[self.fragment_target],
             }),
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         })
     }
 }
