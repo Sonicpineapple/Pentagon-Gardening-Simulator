@@ -11,6 +11,7 @@ mod gfx;
 use gfx::GraphicsState;
 use itertools::Itertools;
 use puzzle::{Grip, Piece};
+use rayon::prelude::*;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();
@@ -396,7 +397,10 @@ impl eframe::App for App {
 
             // Screen space to clip space, matching `unit` so the GPU fills
             // line up with the egui overlay.
-            let scale = [2. * unit / egui_rect.width(), 2. * unit / egui_rect.height()];
+            let scale = [
+                2. * unit / egui_rect.width(),
+                2. * unit / egui_rect.height(),
+            ];
 
             let screen_to_egui =
                 |pos: Pos| pos2(pos.x as f32, -pos.y as f32) * unit + cen.to_vec2();
@@ -458,22 +462,41 @@ impl eframe::App for App {
                     self.pixel_mask = bitbox![0; (target_size[0]*target_size[1]) as usize];
                 }
                 let time = std::time::Instant::now();
+
+                const TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5);
+
                 // let mut rng = thread_rng();
-                while time.elapsed() < std::time::Duration::from_millis(5) {
-                    if !self.is_pixel_filled(
-                        self.index % target_size[0] as usize,
-                        self.index / target_size[0] as usize,
-                        target_size[0] as usize,
-                    ) {
-                        let seed = egui_to_geom(pos2(
-                            (self.index % target_size[0] as usize) as f32,
-                            (self.index / target_size[0] as usize) as f32,
-                        ));
-                        self.expand_seed(seed, &mut circles);
+                'timeout: while time.elapsed() < TIMEOUT {
+                    let num_threads = rayon::current_num_threads();
+                    let mut seeds = Vec::with_capacity(num_threads);
+
+                    while seeds.len() < num_threads {
+                        if time.elapsed() >= TIMEOUT {
+                            break 'timeout;
+                        }
+
+                        if !self.is_pixel_filled(
+                            self.index % target_size[0] as usize,
+                            self.index / target_size[0] as usize,
+                            target_size[0] as usize,
+                        ) {
+                            let seed = egui_to_geom(pos2(
+                                (self.index % target_size[0] as usize) as f32,
+                                (self.index / target_size[0] as usize) as f32,
+                            ));
+                            seeds.push(seed);
+                            // self.expand_seed(seed, &mut circles);
+                        }
+                        self.index =
+                            (self.index + 1000000007) % (target_size[0] * target_size[1]) as usize;
+                        // self.index = (self.index + 1) % (target_size[0] * target_size[1]) as usize
                     }
-                    self.index =
-                        (self.index + 1000000007) % (target_size[0] * target_size[1]) as usize;
-                    // self.index = (self.index + 1) % (target_size[0] * target_size[1]) as usize
+
+                    circles.par_extend(seeds.into_par_iter().flat_map(|seed| {
+                        let mut circles = Vec::new();
+                        self.expand_seed(seed, &mut circles);
+                        circles
+                    }));
                 }
             }
 
@@ -533,17 +556,20 @@ impl eframe::App for App {
                 }
             }
             // pixel mask debug visual
-            // for i in (0..self.pixel_mask.len()).step_by(100) {
-            //     let dpi = ctx.pixels_per_point();
-            //     let (x, y) = (i % target_size[0] as usize, i / target_size[0] as usize);
-            //     if self.is_pixel_filled(x, y, target_size[0] as usize) {
-            //         painter.circle_filled(
-            //             pos2(x as f32 / dpi, y as f32 / dpi),
-            //             2.,
-            //             egui::Color32::GOLD,
-            //         );
-            //     }
-            // }
+            #[cfg(false)]
+            {
+                for i in (0..self.pixel_mask.len()).step_by(100) {
+                    let dpi = ctx.pixels_per_point();
+                    let (x, y) = (i % target_size[0] as usize, i / target_size[0] as usize);
+                    if self.is_pixel_filled(x, y, target_size[0] as usize) {
+                        painter.circle_filled(
+                            pos2(x as f32 / dpi, y as f32 / dpi),
+                            2.,
+                            egui::Color32::GOLD,
+                        );
+                    }
+                }
+            }
             ctx.request_repaint();
             self.reset = false;
             self.regenerate = false;
