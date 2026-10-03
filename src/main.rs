@@ -244,14 +244,17 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("Sliders").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    if ui.button("+").clicked() {
-                        self.circle_count += 1;
-                        self.regenerate = true;
-                    }
-                    if ui.button("-").clicked() && self.circle_count > 1 {
-                        self.circle_count -= 1;
-                        self.regenerate = true;
-                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Circle Count");
+                        if ui.button("+").clicked() {
+                            self.circle_count += 1;
+                            self.regenerate = true;
+                        }
+                        if ui.button("-").clicked() && self.circle_count > 1 {
+                            self.circle_count -= 1;
+                            self.regenerate = true;
+                        }
+                    });
                     ui.checkbox(&mut self.grip_cuts, "All Cuts");
                     ui.checkbox(&mut self.autofill, "Autofill");
                     ui.horizontal(|ui| {
@@ -292,22 +295,34 @@ impl eframe::App for App {
                     }
                 });
                 ui.vertical(|ui| {
-                    self.reset |= ui
-                        .add(
-                            egui::Slider::new(&mut self.scale, (0.1)..=100.)
-                                .logarithmic(true)
-                                .clamp_to_range(false),
-                        )
-                        .changed();
-                    self.reset |= ui
-                        .add(egui::Slider::new(&mut self.depth, 100..=100000).logarithmic(true))
-                        .changed();
-                    self.reset |= ui
-                        .add(egui::Slider::new(&mut self.grip_rad, (0.)..=0.1))
-                        .changed();
-                    self.regenerate |= ui
-                        .add(egui::Slider::new(&mut self.circle_distance, (0.)..=5.))
-                        .changed();
+                    ui.horizontal(|ui| {
+                        self.reset |= ui
+                            .add(
+                                egui::Slider::new(&mut self.scale, (0.1)..=100.)
+                                    .logarithmic(true)
+                                    .clamp_to_range(false),
+                            )
+                            .labelled_by(ui.label("Scale").id)
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        self.reset |= ui
+                            .add(egui::Slider::new(&mut self.depth, 100..=100000).logarithmic(true))
+                            .labelled_by(ui.label("Depth").id)
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        self.reset |= ui
+                            .add(egui::Slider::new(&mut self.grip_rad, (0.)..=0.1))
+                            .labelled_by(ui.label("Grip Radius").id)
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        self.regenerate |= ui
+                            .add(egui::Slider::new(&mut self.circle_distance, (0.)..=5.))
+                            .labelled_by(ui.label("Distance").id)
+                            .changed();
+                    });
                     if let Some(data) = &self.piece_data {
                         ui.label(format!(
                             "{} grips, {} orbit size",
@@ -318,15 +333,24 @@ impl eframe::App for App {
 
                 for circle in &mut self.circles {
                     ui.vertical(|ui| {
-                        self.reset |= ui
-                            .add(
-                                egui::Slider::new(&mut circle.circle.rad, (0.)..=2.)
-                                    .clamp_to_range(false),
-                            )
-                            .changed();
-                        self.reset |= ui
-                            .add(egui::Slider::new(&mut circle.step, 2..=16).clamp_to_range(false))
-                            .changed();
+                        ui.horizontal(|ui| {
+                            self.reset |= ui
+                                .add(
+                                    egui::Slider::new(&mut circle.circle.rad, (0.)..=2.)
+                                        .clamp_to_range(false),
+                                )
+                                .labelled_by(ui.label("Radius").id)
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            self.reset |= ui
+                                .add(
+                                    egui::Slider::new(&mut circle.step, 2..=16)
+                                        .clamp_to_range(false),
+                                )
+                                .labelled_by(ui.label("Step").id)
+                                .changed();
+                        });
                         self.reset |= ui.checkbox(&mut circle.inverted, "Invert").clicked();
                     });
                 }
