@@ -460,6 +460,7 @@ impl eframe::App for App {
             if self.autofill {
                 if self.pixel_mask.len() != (target_size[0] * target_size[1]) as usize {
                     self.pixel_mask = bitbox![0; (target_size[0]*target_size[1]) as usize];
+                    self.reset = true;
                 }
                 let time = std::time::Instant::now();
 
