@@ -1,7 +1,7 @@
 use parking_lot::Mutex;
 use std::{fmt, sync::Arc};
 
-use eframe::{egui, wgpu};
+use eframe::wgpu;
 use wgpu::util::DeviceExt;
 
 use super::structs::CircleInstance;

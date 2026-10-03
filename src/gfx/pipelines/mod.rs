@@ -50,7 +50,7 @@ impl RenderPipelineDescriptor<'_> {
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("{}_pipeline", self.label)),
-            layout: Some(&pipeline_layout),
+            layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader_module,
                 entry_point: &vertex_entry_point,

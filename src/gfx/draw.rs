@@ -117,7 +117,7 @@ impl eframe::egui_wgpu::CallbackTrait for RenderResources {
 
     fn paint<'a>(
         &'a self,
-        info: egui::PaintCallbackInfo,
+        _info: egui::PaintCallbackInfo,
         render_pass: &mut eframe::wgpu::RenderPass<'a>,
         callback_resources: &'a eframe::egui_wgpu::CallbackResources,
     ) {
