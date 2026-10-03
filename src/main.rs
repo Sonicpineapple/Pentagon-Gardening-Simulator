@@ -480,9 +480,10 @@ impl eframe::App for App {
                             self.index / target_size[0] as usize,
                             target_size[0] as usize,
                         ) {
+                            let dpi = ctx.pixels_per_point();
                             let seed = egui_to_geom(pos2(
-                                (self.index % target_size[0] as usize) as f32,
-                                (self.index / target_size[0] as usize) as f32,
+                                (self.index % target_size[0] as usize) as f32 / dpi,
+                                (self.index / target_size[0] as usize) as f32 / dpi,
                             ));
                             seeds.push(seed);
                             // self.expand_seed(seed, &mut circles);
