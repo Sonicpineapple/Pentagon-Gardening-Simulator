@@ -264,7 +264,7 @@ impl eframe::App for App {
                     ui.checkbox(&mut self.autofill, "Autofill");
                     if ui.button("Recolor").clicked() {
                         self.color_seed += 1;
-                        self.regenerate = true;
+                        self.reset = true;
                     };
                     ui.horizontal(|ui| {
                         if ui.button("Reset").clicked() {
