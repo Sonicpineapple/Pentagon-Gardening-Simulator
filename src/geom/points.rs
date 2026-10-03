@@ -139,6 +139,6 @@ impl hypermath::collections::approx_hashmap::ApproxHashMapKey for Pos {
             hypermath::prelude::Float,
         ) -> hypermath::collections::approx_hashmap::FloatHash,
     ) -> Self::Hash {
-        [self.x as f64, self.y as f64].map(float_hash_fn)
+        [self.x, self.y].map(float_hash_fn)
     }
 }

@@ -149,25 +149,25 @@ pub(in crate::gfx) trait BindGroupsTrait<'a>: Sized {
             .collect_vec();
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{label}_pipeline_layout")),
-            bind_group_layouts: &bind_group_layouts.iter().collect_vec(),
-            push_constant_ranges: &[],
+            bind_group_layouts: &bind_group_layouts.iter().map(Some).collect_vec(),
+            immediate_size: 0,
         });
         (pipeline_layout, bind_group_layouts)
     }
 }
 
-pub(in crate::gfx) trait WgpuPassExt<'pass> {
-    fn set_bind_groups<'a: 'pass>(&mut self, bind_groups: &'a BindGroups);
+pub(in crate::gfx) trait WgpuPassExt {
+    fn set_bind_groups(&mut self, bind_groups: &BindGroups);
 }
-impl<'pass> WgpuPassExt<'pass> for wgpu::RenderPass<'pass> {
-    fn set_bind_groups<'a: 'pass>(&mut self, bind_groups: &'a BindGroups) {
+impl WgpuPassExt for wgpu::RenderPass<'_> {
+    fn set_bind_groups(&mut self, bind_groups: &BindGroups) {
         for (i, bind_group) in bind_groups.bind_groups.iter().enumerate() {
             self.set_bind_group(i as u32, &bind_group.base, &bind_group.offsets);
         }
     }
 }
-impl<'pass> WgpuPassExt<'pass> for wgpu::ComputePass<'pass> {
-    fn set_bind_groups<'a: 'pass>(&mut self, bind_groups: &'a BindGroups) {
+impl WgpuPassExt for wgpu::ComputePass<'_> {
+    fn set_bind_groups(&mut self, bind_groups: &BindGroups) {
         for (i, bind_group) in bind_groups.bind_groups.iter().enumerate() {
             self.set_bind_group(i as u32, &bind_group.base, &bind_group.offsets);
         }

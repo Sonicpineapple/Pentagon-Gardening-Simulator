@@ -1,14 +1,14 @@
 use parking_lot::Mutex;
-use std::{fmt, sync::Arc};
+use std::fmt;
 
-use eframe::{egui, wgpu};
+use eframe::wgpu;
 use wgpu::util::DeviceExt;
 
 use super::structs::CircleInstance;
 
 pub(crate) struct GraphicsState {
-    pub(crate) device: Arc<wgpu::Device>,
-    pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     pub(super) circle_pipeline: super::pipelines::circles::Pipeline,
     pub(super) blit_pipeline: super::pipelines::blit::Pipeline,
     pub(super) buffer: wgpu::Buffer,
@@ -21,8 +21,8 @@ pub(crate) struct GraphicsState {
 }
 impl GraphicsState {
     pub(crate) fn new(render_state: &eframe::egui_wgpu::RenderState) -> Self {
-        let device = Arc::clone(&render_state.device);
-        let queue = Arc::clone(&render_state.queue);
+        let device = render_state.device.clone();
+        let queue = render_state.queue.clone();
         let uv_vertex_buffer = create_buffer_init::<super::structs::UvVertex>(
             &device,
             "uv_vertices",
